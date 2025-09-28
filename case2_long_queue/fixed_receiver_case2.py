@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+
 import socket, time, threading, queue, json, random
+from logging_util import BufferLogger  # NEW LINE ADDED
 
 HOST, PORT = 'localhost', 5001
 
@@ -15,6 +17,7 @@ class FixedReceiverCase2:
         self.q = queue.Queue(maxsize=Q_MAX)
         self.conn = None
         self.running = True
+        self.logger = BufferLogger('case2_long_queue/queue_log.txt')  # NEW LINE ADDED
 
     def worker(self, wid):
         while self.running:
@@ -54,40 +57,49 @@ class FixedReceiverCase2:
             time.sleep(0.2)
 
     def serve(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((HOST, PORT)); s.listen(1)
-        print(f"[RX2] Fixed receiver on {HOST}:{PORT} Qmax={Q_MAX}, workers={WORKERS}")
-        self.conn, addr = s.accept()
-        print(f"[RX2] Client {addr} connected")
+        self.logger.start()  # NEW LINE ADDED
+        try:  # NEW TRY BLOCK ADDED
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((HOST, PORT)); s.listen(1)
+            print(f"[RX2] Fixed receiver on {HOST}:{PORT} Qmax={Q_MAX}, workers={WORKERS}")
+            self.conn, addr = s.accept()
+            print(f"[RX2] Client {addr} connected")
 
-        # Start workers and control loop
-        for i in range(WORKERS):
-            threading.Thread(target=self.worker, args=(i,), daemon=True).start()
-        threading.Thread(target=self.control_sender, daemon=True).start()
+            # Start workers and control loop
+            for i in range(WORKERS):
+                threading.Thread(target=self.worker, args=(i,), daemon=True).start()
+            threading.Thread(target=self.control_sender, daemon=True).start()
 
-        while True:
-            try:
-                data = self.conn.recv(4096)
-                if not data:
-                    break
-                # RED/tail-drop
-                if self.red_drop():
-                    continue
+            while True:
                 try:
-                    self.q.put_nowait(data)
-                except queue.Full:
-                    # Hard tail drop
-                    pass
-            except Exception as e:
-                print(f"[RX2] recv error: {e}")
-                break
+                    data = self.conn.recv(4096)
+                    if not data:
+                        break
+                    # RED/tail-drop
+                    if self.red_drop():
+                        continue
+                    try:
+                        self.q.put_nowait(data)
+                    except queue.Full:
+                        # Hard tail drop
+                        pass
+                    
+                    # Log current queue size for analysis
+                    self.logger.update_buffer_size(self.q.qsize())  # NEW LINE ADDED
+                    
+                except Exception as e:
+                    print(f"[RX2] recv error: {e}")
+                    break
 
-        self.running = False
-        try: self.conn.close()
-        except: pass
-        s.close()
-        print("[RX2] Closed")
+            self.running = False
+            try: self.conn.close()
+            except: pass
+            s.close()
+            print("[RX2] Closed")
+            
+        finally:  # NEW  BLOCK ADDED
+            self.logger.stop()  # NEW LINE ADDED
 
 if __name__ == "__main__":
     FixedReceiverCase2().serve()
